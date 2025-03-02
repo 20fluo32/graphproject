@@ -15,9 +15,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.FloatBuffer;
 import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 @Service
 public class ImageTransferServiceImpl implements ImageTransferService {
@@ -27,14 +25,14 @@ public class ImageTransferServiceImpl implements ImageTransferService {
         nu.pattern.OpenCV.loadLocally();
     }
 
-    private final String styleTransferModelPath = "src/main/resources/model/generator_v2.onnx"; // 图像迁移模型路径
+    private final String styleTransferModelPath = "E:\\graduate desiner\\graphTransferProject\\backend\\src\\main\\resources\\model\\generator_v2.onnx"; // 图像迁移模型路径
 
     @Override
     public String processImage(MultipartFile file) throws IOException, OrtException {
         // 获取项目的根目录
         String projectRoot = System.getProperty("user.dir");
         // 设置上传目录为 src/main/resources/static/images
-        String uploadDir = projectRoot + File.separator + "src" + File.separator + "main" + File.separator + "resources" + File.separator + "static" + File.separator + "images";
+        String uploadDir = projectRoot + File.separator + "backend" + File.separator + "src" + File.separator + "main" + File.separator + "resources" + File.separator + "static" + File.separator + "images";
         // 创建目录
         createDirectory(uploadDir);
 
@@ -66,7 +64,7 @@ public class ImageTransferServiceImpl implements ImageTransferService {
         int originalHeight = originalImage.rows();
 
         // 将图片转换为 RGB 格式
-        Imgproc.cvtColor(originalImage, originalImage, Imgproc.COLOR_BGR2RGB);
+        //Imgproc.cvtColor(originalImage, originalImage, Imgproc.COLOR_BGR2RGB);
 
         // 调整图片尺寸为模型输入尺寸（假设模型输入为 256x256）
         int targetWidth = 256;
@@ -80,10 +78,20 @@ public class ImageTransferServiceImpl implements ImageTransferService {
             for (int j = 0; j < targetWidth; j++) {
                 double[] pixel = resizedImage.get(i, j);
                 for (int k = 0; k < 3; k++) {
-                    pixels[i * targetWidth * 3 + j * 3 + k] = (float) ((pixel[k] / 255.0) * 2 - 1); // 归一化到 [-1, 1]
+                    pixels[k * targetHeight * targetWidth + i * targetWidth + j] = (float) ((pixel[k] / 255.0) * 2 - 1); // 归一化到 [-1, 1]
                 }
             }
         }
+
+        // 打印输入数据的最小值和最大值
+        float minInputValue = Float.MAX_VALUE;
+        float maxInputValue = Float.MIN_VALUE;
+        for (float value : pixels) {
+            if (value < minInputValue) minInputValue = value;
+            if (value > maxInputValue) maxInputValue = value;
+        }
+        System.out.println("Input min value: " + minInputValue);
+        System.out.println("Input max value: " + maxInputValue);
 
         // 创建 OnnxTensor 对象
         long[] shape = {1L, 3L, (long) targetHeight, (long) targetWidth};
@@ -94,6 +102,21 @@ public class ImageTransferServiceImpl implements ImageTransferService {
         // 运行推理
         OrtSession.Result output = styleTransferSession.run(inputMap);
         float[][][][] outputData = (float[][][][]) output.get(0).getValue();
+
+        // 打印输出数据的最小值和最大值
+        float minOutputValue = Float.MAX_VALUE;
+        float maxOutputValue = Float.MIN_VALUE;
+        for (int i = 0; i < targetHeight; i++) {
+            for (int j = 0; j < targetWidth; j++) {
+                for (int k = 0; k < 3; k++) {
+                    float value = outputData[0][k][i][j];
+                    if (value < minOutputValue) minOutputValue = value;
+                    if (value > maxOutputValue) maxOutputValue = value;
+                }
+            }
+        }
+        System.out.println("Output min value: " + minOutputValue);
+        System.out.println("Output max value: " + maxOutputValue);
 
         // 将输出数据从 [-1, 1] 反归一化到 [0, 1]
         Mat outputImage = new Mat(targetHeight, targetWidth, CvType.CV_32FC3);
@@ -111,10 +134,14 @@ public class ImageTransferServiceImpl implements ImageTransferService {
         Mat finalOutputImage = new Mat();
         Imgproc.resize(outputImage, finalOutputImage, new Size(originalWidth, originalHeight));
 
+        // 将输出图片转换为 8 位无符号整数并缩放到 [0, 255]
+        Mat finalOutputImage8U = new Mat();
+        finalOutputImage.convertTo(finalOutputImage8U, CvType.CV_8UC3, 255.0);
+
         // 将输出图片保存到文件
         String outputFileName = "output_image_" + timestamp + extension;
         String outputPath = uploadDir + File.separator + outputFileName;
-        Imgcodecs.imwrite(outputPath, finalOutputImage);
+        Imgcodecs.imwrite(outputPath, finalOutputImage8U);
 
         System.out.println("图片处理完成，输出文件路径：" + outputPath);
         return outputFileName; // 返回处理后的图片文件名
